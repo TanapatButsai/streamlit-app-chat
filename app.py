@@ -171,7 +171,7 @@ elif st.session_state.mode and not st.session_state.completed:
                 st.session_state.chat_history.append(("assistant", f"{st.session_state.question_index+1}. {next_q} (1-4)"))
             else:
                 try:
-                    response = requests.post("http://127.0.0.1:5000/predict", json=adjusted_form_data(st.session_state.form_data))
+                    response = requests.post("https://vonix-dass-chatbot.onrender.com/predict", json=adjusted_form_data(st.session_state.form_data))
                     result = response.json()
                     if result["status"] == "success":
                         st.session_state.chat_history.append(("assistant", f"Assessment Result:\n- Depression: **{result['result']['depression']}**\n- Anxiety: **{result['result']['anxiety']}**\n- Stress: **{result['result']['stress']}**"))
