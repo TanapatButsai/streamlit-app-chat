@@ -1,7 +1,38 @@
 import streamlit as st
-import pandas as pd
 import requests
+import os
 
+# HuggingFace API config
+API_URL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+headers = {"Authorization": f"Bearer {os.getenv('HF_TOKEN')}"}
+
+# Chat function (Zephyr)
+def chat_with_gpt(prompt, history=[]):
+    full_prompt = ""
+    for sender, msg in history:
+        role = "User" if sender == "user" else "Assistant"
+        full_prompt += f"{role}: {msg}\n"
+    full_prompt += f"User: {prompt}\nAssistant:"
+
+    payload = {
+        "inputs": full_prompt,
+        "parameters": {"temperature": 0.7, "max_new_tokens": 200}
+    }
+
+    response = requests.post(API_URL, headers=headers, json=payload)
+
+    try:
+        result = response.json()
+        if isinstance(result, list) and "generated_text" in result[0]:
+            return result[0]["generated_text"].split("Assistant:")[-1].strip()
+        elif "error" in result:
+            raise Exception(result["error"])
+        else:
+            raise Exception("Unknown format: " + str(result))
+    except Exception as e:
+        raise Exception(f"❌ Raw response:\n{response.text}\n\nParsed error: {e}")
+
+# DASS Questions
 # Define all DASS-42 questions
 question_map_full = {
     "Q1A": "I found myself getting upset by quite trivial things.",
@@ -81,114 +112,84 @@ interpretation = {
     }
 }
 
-# Wrap submission for API to subtract 1 from all form inputs
 def adjusted_form_data(form_data):
     return {k: max(v - 1, 0) for k, v in form_data.items()}
 
-# Session state setup
+# Session setup
+st.set_page_config(page_title="VONIX - GPT + DASS", layout="centered")
+st.markdown("### 🧠 VONIX Mental Wellness Assistant")
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+    st.session_state.chat_history.append((
+        "assistant",
+        "👋 Hi! I’m **Nix**, your mental wellness assistant.\n\nYou can type `1` to start a short checkup, `2` for a full checkup, or ask me anything!"
+    ))
+if "mode" not in st.session_state:
+    st.session_state.mode = "chat"
 if "form_data" not in st.session_state:
     st.session_state.form_data = {}
 if "question_index" not in st.session_state:
-    st.session_state.question_index = -1
+    st.session_state.question_index = 0
 if "completed" not in st.session_state:
     st.session_state.completed = False
-if "mode" not in st.session_state:
-    st.session_state.mode = None
-if "awaiting_question" not in st.session_state:
-    st.session_state.awaiting_question = False
-if "awaiting_first_input" not in st.session_state:
-    st.session_state.awaiting_first_input = False
-if "mode_set" not in st.session_state:
-    st.session_state.mode_set = False
 
-# UI
-st.set_page_config(page_title="VONIX - AI Health Assistant", layout="centered")
-st.title("VONIX AI Health Assistant")
+# User input
+user_input = st.chat_input("Type 1 for short test, 2 for full test, or chat with me!")
 
-# Chat message start
-if st.session_state.question_index == -1:
-    st.session_state.chat_history.append(("assistant", "Hi there! Would you like to take the short (21 questions) or full (42 questions) DASS assessment?\n\nPlease type `1` for short or `2` for full."))
-    st.session_state.question_index = 0
+if user_input:
+    st.session_state.chat_history.append(("user", user_input))
+    
+    # === MODE: CHAT GPT ===
+    if st.session_state.mode == "chat":
+        if user_input.strip() == "1":
+            st.session_state.mode = "dass_short"
+            st.session_state.chat_history.append(("assistant", "Starting short version (21 questions). Answer 1–4."))
+        elif user_input.strip() == "2":
+            st.session_state.mode = "dass_full"
+            st.session_state.chat_history.append(("assistant", "Starting full version (42 questions). Answer 1–4."))
+        else:
+            try:
+                reply = chat_with_gpt(user_input, st.session_state.chat_history)
+                st.session_state.chat_history.append(("assistant", reply))
+            except Exception as e:
+                st.session_state.chat_history.append(("assistant", str(e)))
 
-user_input = st.chat_input("Your answer")
+    # === MODE: DASS ===
+    elif st.session_state.mode in ["dass_short", "dass_full"] and not st.session_state.completed:
+        qmap = question_map_short if st.session_state.mode == "dass_short" else question_map_full
+        q_keys = list(qmap.keys())
+        idx = st.session_state.question_index
 
-if user_input and not st.session_state.mode_set:
-    if user_input.strip() == "1":
-        st.session_state.mode = "short"
-        st.session_state.chat_history.append(("user", user_input))
-        st.session_state.chat_history.append(("assistant", "Great! Let's begin the short version. \n Please answer each question with a number from 1 to 4."))
-        # st.session_state.chat_history.append(("assistant", "Please answer each question with a number from 1 to 4."))
-        st.session_state.awaiting_question = True
-        st.session_state.awaiting_first_input = False
-        st.session_state.mode_set = True
-    elif user_input.strip() == "2":
-        st.session_state.mode = "full"
-        st.session_state.chat_history.append(("user", user_input))
-        st.session_state.chat_history.append(("assistant", "Great! Let's begin the full version. \n Please answer each question with a number from 1 to 4."))
-        # st.session_state.chat_history.append(("assistant", "Please answer each question with a number from 1 to 4."))
-        st.session_state.awaiting_question = True
-        st.session_state.awaiting_first_input = False
-        st.session_state.mode_set = True
-    else:
-        st.session_state.chat_history.append(("user", user_input))
-        st.session_state.chat_history.append(("assistant", "Please type `1` for short (21) or `2` for full (42) assessment."))
-
-question_map = question_map_short if st.session_state.mode == "short" else question_map_full
-
-if st.session_state.awaiting_question:
-    q_keys = list(question_map.keys())
-    first_q = question_map[q_keys[0]]
-    st.session_state.chat_history.append(("assistant", f"1. {first_q} (1-4)"))
-    st.session_state.awaiting_question = False
-    st.session_state.awaiting_first_input = True
-
-elif st.session_state.mode and not st.session_state.completed and st.session_state.awaiting_first_input:
-    q_keys = list(question_map.keys())
-    current_key = q_keys[0]
-    if user_input and user_input.strip() in ["1", "2", "3", "4"] and current_key not in st.session_state.form_data:
-        rating = int(user_input.strip())
-        st.session_state.form_data[current_key] = rating
-        st.session_state.chat_history.append(("user", user_input))
-        st.session_state.question_index = 1
-        st.session_state.awaiting_first_input = False
-        next_q = question_map[q_keys[1]]
-        st.session_state.chat_history.append(("assistant", f"2. {next_q} (1-4)"))
-
-elif st.session_state.mode and not st.session_state.completed:
-    q_keys = list(question_map.keys())
-    if 0 <= st.session_state.question_index < len(q_keys):
-        current_key = q_keys[st.session_state.question_index]
-        if user_input and user_input.strip() in ["1", "2", "3", "4"] and current_key not in st.session_state.form_data:
-            rating = int(user_input.strip())
-            st.session_state.form_data[current_key] = rating
-            st.session_state.chat_history.append(("user", user_input))
+        if user_input.strip() in ["1", "2", "3", "4"] and q_keys[idx] not in st.session_state.form_data:
+            st.session_state.form_data[q_keys[idx]] = int(user_input.strip())
             st.session_state.question_index += 1
 
             if st.session_state.question_index < len(q_keys):
-                next_q = question_map[q_keys[st.session_state.question_index]]
-                st.session_state.chat_history.append(("assistant", f"{st.session_state.question_index+1}. {next_q} (1-4)"))
+                next_q = qmap[q_keys[st.session_state.question_index]]
+                st.session_state.chat_history.append(("assistant", f"{st.session_state.question_index+1}. {next_q} (1–4)"))
             else:
                 try:
                     response = requests.post("https://vonix-dass-chatbot.onrender.com/predict", json=adjusted_form_data(st.session_state.form_data))
                     result = response.json()
                     if result["status"] == "success":
-                        st.session_state.chat_history.append(("assistant", f"Assessment Result:\n- Depression: **{result['result']['depression']}**\n- Anxiety: **{result['result']['anxiety']}**\n- Stress: **{result['result']['stress']}**"))
+                        st.session_state.chat_history.append(("assistant", f"**Assessment Result**\n- Depression: {result['result']['depression']}\n- Anxiety: {result['result']['anxiety']}\n- Stress: {result['result']['stress']}"))
                     else:
                         st.session_state.chat_history.append(("assistant", f"Error: {result['message']}"))
                 except Exception as e:
                     st.session_state.chat_history.append(("assistant", f"Could not connect to backend: {e}"))
-                st.session_state.completed = True
-        elif user_input and current_key not in st.session_state.form_data:
-            st.session_state.chat_history.append(("user", user_input))
-            st.session_state.chat_history.append(("assistant", "Please answer with a number between 1 and 4."))
-    elif st.session_state.question_index >= len(q_keys):
-        st.session_state.completed = True
+                st.session_state.chat_history.append(("assistant", "You can now ask me anything again or type `1`/`2` to start a new assessment."))
+                st.session_state.completed = False
+                st.session_state.mode = "chat"
+                st.session_state.form_data = {}
+                st.session_state.question_index = -1
+                st.session_state.mode_set = False
 
+        else:
+            st.session_state.chat_history.append(("assistant", "Please answer with a number from 1 to 4."))
 
-
-# Display chat
+# Display history
 for sender, msg in st.session_state.chat_history:
     with st.chat_message(sender):
         st.markdown(msg)
+        
